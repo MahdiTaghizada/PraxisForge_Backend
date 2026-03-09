@@ -1,0 +1,286 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PraxisForge API — Task Management & Project Context",
+    "version": "0.3.0",
+    "description": "Updated OpenAPI definitions for advanced task management, task-specific comments, AI mode logic, and user-task relationships."
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT token with `sub` claim containing the user ID."
+      }
+    },
+    "schemas": {
+      "ProjectMode": {
+        "type": "string",
+        "enum": ["startup", "hackathon", "enterprise", "idea"],
+        "description": "Controls AI behaviour: system prompts, extraction heuristics, and task granularity."
+      },
+      "TaskPriority": {
+        "type": "string",
+        "enum": ["low", "medium", "high", "urgent"]
+      },
+      "TaskStatus": {
+        "type": "string",
+        "enum": ["todo", "in_progress", "done"]
+      },
+      "TaskCreateDTO": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "description": { "type": "string", "default": "" },
+          "assignee_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "UUID of a project member. Validated against project_members table."
+          },
+          "priority": { "$ref": "#/components/schemas/TaskPriority", "default": "medium" },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": [],
+            "description": "Free-form labels for categorisation (e.g. ['backend','auth','p0'])."
+          },
+          "dependencies": {
+            "type": "array",
+            "items": { "type": "string", "format": "uuid" },
+            "default": [],
+            "description": "Task UUIDs that must be completed before this task can start. Must exist in the same project."
+          },
+          "deadline": { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "TaskUpdateDTO": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "nullable": true },
+          "description": { "type": "string", "nullable": true },
+          "assignee_id": { "type": "string", "format": "uuid", "nullable": true },
+          "priority": { "$ref": "#/components/schemas/TaskPriority", "nullable": true },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" },
+            "nullable": true
+          },
+          "dependencies": {
+            "type": "array",
+            "items": { "type": "string", "format": "uuid" },
+            "nullable": true
+          },
+          "deadline": { "type": "string", "format": "date-time", "nullable": true },
+          "status": { "$ref": "#/components/schemas/TaskStatus", "nullable": true }
+        }
+      },
+      "TaskResponseDTO": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "project_id": { "type": "string", "format": "uuid" },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "assignee_id": { "type": "string", "format": "uuid", "nullable": true },
+          "priority": { "$ref": "#/components/schemas/TaskPriority" },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "dependencies": { "type": "array", "items": { "type": "string", "format": "uuid" } },
+          "deadline": { "type": "string", "format": "date-time", "nullable": true },
+          "status": { "$ref": "#/components/schemas/TaskStatus" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "CommentCreateDTO": {
+        "type": "object",
+        "required": ["content"],
+        "properties": {
+          "content": { "type": "string", "minLength": 1 }
+        }
+      },
+      "CommentUpdateDTO": {
+        "type": "object",
+        "required": ["content"],
+        "properties": {
+          "content": { "type": "string", "minLength": 1 }
+        }
+      },
+      "CommentResponseDTO": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "task_id": { "type": "string", "format": "uuid" },
+          "project_id": { "type": "string", "format": "uuid" },
+          "author_id": { "type": "string" },
+          "content": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  },
+  "security": [{ "BearerAuth": [] }],
+  "paths": {
+    "/api/v1/projects/{project_id}/tasks/": {
+      "post": {
+        "operationId": "create_task",
+        "tags": ["Tasks"],
+        "summary": "Create a new task with priority, assignee, tags, and dependencies",
+        "parameters": [
+          { "name": "project_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskCreateDTO" } } }
+        },
+        "responses": {
+          "201": {
+            "description": "Task created",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskResponseDTO" } } }
+          },
+          "404": { "description": "Project not found" },
+          "422": { "description": "Assignee not a project member, or dependency tasks not found" }
+        }
+      },
+      "get": {
+        "operationId": "list_tasks",
+        "tags": ["Tasks"],
+        "summary": "List all tasks for a project",
+        "parameters": [
+          { "name": "project_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of tasks",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/TaskResponseDTO" } } } }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/tasks/{task_id}": {
+      "get": {
+        "operationId": "get_task",
+        "tags": ["Tasks"],
+        "parameters": [
+          { "name": "project_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskResponseDTO" } } } },
+          "404": { "description": "Task not found" }
+        }
+      },
+      "patch": {
+        "operationId": "update_task",
+        "tags": ["Tasks"],
+        "summary": "Partially update a task (including reassignment, dependency changes)",
+        "parameters": [
+          { "name": "project_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskUpdateDTO" } } }
+        },
+        "responses": {
+          "200": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskResponseDTO" } } } },
+          "404": { "description": "Task not found" },
+          "422": { "description": "Validation error (self-dependency, missing deps, invalid assignee)" }
+        }
+      },
+      "delete": {
+        "operationId": "delete_task",
+        "tags": ["Tasks"],
+        "parameters": [
+          { "name": "project_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "204": { "description": "Task deleted" },
+          "404": { "description": "Task not found" }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/tasks/{task_id}/comments/": {
+      "post": {
+        "operationId": "create_comment",
+        "tags": ["Comments"],
+        "summary": "Add a comment to a specific task",
+        "parameters": [
+          { "name": "project_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CommentCreateDTO" } } }
+        },
+        "responses": {
+          "201": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CommentResponseDTO" } } } },
+          "404": { "description": "Project or task not found" }
+        }
+      },
+      "get": {
+        "operationId": "list_comments",
+        "tags": ["Comments"],
+        "summary": "List all comments on a task (chronological)",
+        "parameters": [
+          { "name": "project_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/CommentResponseDTO" } } } } }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/tasks/{task_id}/comments/{comment_id}": {
+      "get": {
+        "operationId": "get_comment",
+        "tags": ["Comments"],
+        "parameters": [
+          { "name": "project_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "comment_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CommentResponseDTO" } } } },
+          "404": { "description": "Comment not found" }
+        }
+      },
+      "patch": {
+        "operationId": "update_comment",
+        "tags": ["Comments"],
+        "summary": "Edit a comment (author only)",
+        "parameters": [
+          { "name": "project_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "comment_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CommentUpdateDTO" } } }
+        },
+        "responses": {
+          "200": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CommentResponseDTO" } } } },
+          "403": { "description": "Only the comment author can edit" },
+          "404": { "description": "Comment not found" }
+        }
+      },
+      "delete": {
+        "operationId": "delete_comment",
+        "tags": ["Comments"],
+        "summary": "Delete a comment (author only)",
+        "parameters": [
+          { "name": "project_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "comment_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "204": { "description": "Comment deleted" },
+          "403": { "description": "Only the comment author can delete" },
+          "404": { "description": "Comment not found" }
+        }
+      }
+    }
+  }
+}
