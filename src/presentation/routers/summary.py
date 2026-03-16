@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from src.application.dtos.schemas import FactResponseDTO, ProjectSummaryResponseDTO
 from src.application.interfaces.llm import LLMService
@@ -31,6 +31,7 @@ router = APIRouter(prefix="/projects/{project_id}/summary", tags=["Summary"])
 @router.get("/", response_model=ProjectSummaryResponseDTO)
 async def generate_project_summary(
     project_id: uuid.UUID,
+    refresh: bool = Query(False, description="Bypass cache and regenerate summary"),
     owner_id: str = Depends(get_current_user_id),
     project_repo: ProjectRepository = Depends(get_project_repo),
     fact_repo: FactRepository = Depends(get_fact_repo),
@@ -52,7 +53,7 @@ async def generate_project_summary(
         cache=cache,
         cache_ttl_seconds=settings.summary_cache_ttl_seconds,
     )
-    result = await use_case.execute(project)
+    result = await use_case.execute(project, force_refresh=refresh)
 
     return ProjectSummaryResponseDTO(
         project_name=result["project_name"],

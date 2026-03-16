@@ -203,10 +203,21 @@ class SWOTAnalysis(BaseModel):
     threats: list[str]
 
 
+class SearchEvaluationDTO(BaseModel):
+    uniqueness_score: int = Field(..., ge=0, le=100)
+    market_gap_score: int = Field(..., ge=0, le=100)
+    feasibility_score: int = Field(..., ge=0, le=100)
+    innovation_score: int = Field(..., ge=0, le=100)
+    early_stage_fit_score: int = Field(..., ge=0, le=100)
+    verdict: str
+    recommendations: list[str]
+
+
 class SearchResponseDTO(BaseModel):
     summary: str
     competitors: list[str]
     swot: SWOTAnalysis
+    evaluation: SearchEvaluationDTO
     sources: list[str]
 
 

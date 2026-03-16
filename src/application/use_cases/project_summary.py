@@ -34,15 +34,37 @@ MODE: {project_mode}
 
 Generate a JSON response with exactly this structure:
 {{
-  "summary": "A comprehensive 3-5 paragraph summary of the project's current state, goals, and progress.",
-  "architecture_overview": "A description of the technical architecture, tech stack decisions, and system design based on the stored facts.",
-  "recommended_db_structure": "Based on the project's domain, recommend a database schema with key tables and relationships.",
-  "key_insights": ["insight 1", "insight 2", "insight 3"]
+    "summary": "A comprehensive 3-5 paragraph summary of the project's current state, goals, and progress.",
+    "architecture_overview": "A description of the technical architecture, tech stack decisions, and system design based on the stored facts.",
+    "recommended_db_structure": "Based on the project's domain, recommend a database schema with key tables and relationships.",
+    "key_insights": ["insight 1", "insight 2", "insight 3"]
 }}
+
+LANGUAGE RULE:
+{language_instruction}
+
+CRITICAL STYLE RULE:
+- Be realistic and candid.
+- Highlight concrete risks, weak assumptions, and missing decisions.
+- Avoid generic motivational phrasing.
 
 Base everything on the actual data provided. Do not invent information.
 Return ONLY valid JSON (no markdown fences).
 """
+
+
+def _contains_azerbaijani_chars(text: str) -> bool:
+    lowered = text.lower()
+    return any(ch in lowered for ch in "əğıöşüç")
+
+
+def _looks_azerbaijani_text(text: str) -> bool:
+    lowered = text.lower()
+    az_markers = [
+        " və ", " üçün ", " layihə", "məlumat", "xülasə", "deyil", "olaraq", "hansı",
+    ]
+    marker_hits = sum(1 for marker in az_markers if marker in lowered)
+    return _contains_azerbaijani_chars(lowered) or marker_hits >= 2
 
 
 class ProjectSummaryUseCase:
@@ -62,11 +84,11 @@ class ProjectSummaryUseCase:
         self._cache = cache
         self._cache_ttl_seconds = cache_ttl_seconds
 
-    async def execute(self, project: Project) -> dict:
+    async def execute(self, project: Project, force_refresh: bool = False) -> dict:
         """Generate a full project summary combining all stored data."""
 
         cache_key = f"summary:{project.id}"
-        if self._cache:
+        if self._cache and not force_refresh:
             cached = self._cache.get(cache_key)
             if cached is not None:
                 return cached
@@ -108,6 +130,12 @@ class ProjectSummaryUseCase:
             f"{m.role.upper()}: {m.content[:200]}" for m in messages[-10:]
         ) if messages else "No conversations yet."
 
+        language_instruction = (
+            "Respond in Azerbaijani because recent conversation appears to be in Azerbaijani."
+            if _looks_azerbaijani_text(chat_text)
+            else "Respond in English unless the conversation clearly requires another language."
+        )
+
         # Generate summary via LLM
         prompt = _SUMMARY_PROMPT.format(
             project_name=project.name,
@@ -116,6 +144,7 @@ class ProjectSummaryUseCase:
             facts_text=facts_text,
             tasks_text=tasks_text,
             chat_text=chat_text,
+            language_instruction=language_instruction,
         )
 
         raw = await self._llm.generate(prompt=prompt)
@@ -131,8 +160,8 @@ class ProjectSummaryUseCase:
             logger.warning("Summary LLM returned unparseable JSON")
             parsed = {
                 "summary": raw,
-                "architecture_overview": "Could not parse structured response.",
-                "recommended_db_structure": "Could not parse structured response.",
+                "architecture_overview": "Strukturlaşdırılmış cavab parse edilə bilmədi.",
+                "recommended_db_structure": "Strukturlaşdırılmış cavab parse edilə bilmədi.",
                 "key_insights": [],
             }
 
