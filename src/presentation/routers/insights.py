@@ -6,7 +6,14 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
-from src.application.dtos.schemas import FactResponseDTO, FactUpdateDTO, InsightsResponseDTO
+from src.application.dtos.schemas import (
+    FactPinDTO,
+    FactResponseDTO,
+    FactUpdateDTO,
+    InsightsResponseDTO,
+)
+from src.application.interfaces.vector_store import VectorChunk, VectorStoreService
+from src.domain.entities.models import StructuredFact
 from src.domain.repositories.fact_repo import FactRepository
 from src.domain.repositories.project_repo import ProjectRepository
 from src.domain.value_objects.enums import FactCategory
@@ -14,9 +21,22 @@ from src.presentation.dependencies.deps import (
     get_current_user_id,
     get_fact_repo,
     get_project_repo,
+    get_vector_store,
 )
 
 router = APIRouter(prefix="/projects/{project_id}/insights", tags=["Insights"])
+_PINNED_PREFIX = "[PINNED] "
+
+
+def _is_pinned_fact(content: str) -> bool:
+    return str(content).strip().lower().startswith(_PINNED_PREFIX.strip().lower())
+
+
+def _to_pinned_content(content: str) -> str:
+    cleaned = content.strip()
+    if _is_pinned_fact(cleaned):
+        return cleaned
+    return f"{_PINNED_PREFIX}{cleaned}"
 
 
 def _fact_to_dto(f) -> FactResponseDTO:
@@ -66,6 +86,52 @@ async def list_all_facts(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     facts = await fact_repo.list_by_project(project_id)
     return [_fact_to_dto(f) for f in facts]
+
+
+@router.post("/pin", response_model=FactResponseDTO, status_code=status.HTTP_201_CREATED)
+async def pin_fact(
+    project_id: uuid.UUID,
+    body: FactPinDTO,
+    owner_id: str = Depends(get_current_user_id),
+    project_repo: ProjectRepository = Depends(get_project_repo),
+    fact_repo: FactRepository = Depends(get_fact_repo),
+    vector_store: VectorStoreService = Depends(get_vector_store),
+) -> FactResponseDTO:
+    """Persist a critical decision as long-term memory for this project."""
+    project = await project_repo.get_by_id(project_id, owner_id)
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    pinned_content = _to_pinned_content(body.content)
+    existing_facts = await fact_repo.list_by_project(project_id, body.category)
+    existing_normalized = {f.content.strip().lower() for f in existing_facts}
+
+    if pinned_content.strip().lower() in existing_normalized:
+        existing = next(
+            f for f in existing_facts if f.content.strip().lower() == pinned_content.strip().lower()
+        )
+        return _fact_to_dto(existing)
+
+    fact = StructuredFact(
+        project_id=project_id,
+        category=body.category,
+        content=pinned_content,
+        source_message_id=None,
+    )
+    created = await fact_repo.create(fact)
+
+    await vector_store.upsert_chunks(
+        [
+            VectorChunk(
+                text=created.content,
+                project_id=project_id,
+                chunk_type="fact",
+                metadata={"category": str(created.category), "pinned": True},
+            )
+        ]
+    )
+
+    return _fact_to_dto(created)
 
 
 @router.patch(

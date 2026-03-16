@@ -160,6 +160,9 @@ docker-compose.override.yml
 # ========================================
 # Project Specific
 # ========================================
+# Local audit/test scripts & reports (not for production)
+local_tests/
+
 # Uploaded files (user data)
 uploads/*
 !uploads/.gitkeep

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime
 
@@ -25,6 +26,15 @@ from src.domain.repositories.task_repo import TaskRepository
 from src.domain.value_objects.enums import FactCategory, ProjectMode
 
 logger = logging.getLogger(__name__)
+_PINNED_PREFIX = "[PINNED] "
+_DECISION_MARKERS = (
+    "decision:",
+    "qerar:",
+    "qərar:",
+    "critical:",
+    "kritik:",
+    "pin:",
+)
 
 _MODE_EXTRACTION_HINTS: dict[str, str] = {
     ProjectMode.HACKATHON: (
@@ -81,6 +91,59 @@ class SmartExtractionUseCase:
         self._fact_repo = fact_repo
         self._task_repo = task_repo
 
+    async def _persist_explicit_pinned_decisions(
+        self,
+        project_id: uuid.UUID,
+        conversation_snippet: str,
+        source_message_id: uuid.UUID | None,
+        vector_chunks: list[VectorChunk],
+    ) -> None:
+        """Persist user-marked critical decisions before LLM extraction.
+
+        Supported patterns in user lines: DECISION:, QERAR:, QƏRAR:, PIN:, CRITICAL:, KRITIK:
+        """
+        existing = await self._fact_repo.list_by_project(project_id, FactCategory.TECHNICAL_DECISION)
+        existing_normalized = {f.content.strip().lower() for f in existing}
+
+        for raw_line in conversation_snippet.splitlines():
+            line = raw_line.strip()
+            if not line.lower().startswith("user:"):
+                continue
+            user_text = line.split(":", 1)[1].strip() if ":" in line else ""
+            lower_user_text = user_text.lower()
+
+            marker = next((m for m in _DECISION_MARKERS if m in lower_user_text), None)
+            if not marker:
+                continue
+
+            idx = lower_user_text.find(marker)
+            decision = user_text[idx + len(marker):].strip(" -:\t")
+            decision = re.sub(r"\s+", " ", decision)
+            if len(decision) < 6:
+                continue
+
+            pinned = f"{_PINNED_PREFIX}{decision}"
+            key = pinned.strip().lower()
+            if key in existing_normalized:
+                continue
+
+            fact = StructuredFact(
+                project_id=project_id,
+                category=FactCategory.TECHNICAL_DECISION,
+                content=pinned,
+                source_message_id=source_message_id,
+            )
+            await self._fact_repo.create(fact)
+            existing_normalized.add(key)
+            vector_chunks.append(
+                VectorChunk(
+                    text=pinned,
+                    project_id=project_id,
+                    chunk_type="fact",
+                    metadata={"category": FactCategory.TECHNICAL_DECISION, "pinned": True},
+                )
+            )
+
     async def execute(
         self,
         project_id: uuid.UUID,
@@ -110,6 +173,13 @@ class SmartExtractionUseCase:
             return
 
         vector_chunks: list[VectorChunk] = []
+
+        await self._persist_explicit_pinned_decisions(
+            project_id=project_id,
+            conversation_snippet=conversation_snippet,
+            source_message_id=source_message_id,
+            vector_chunks=vector_chunks,
+        )
 
         # ── Technical decisions ───────────────────────────
         for decision in data.get("technical_decisions", []):

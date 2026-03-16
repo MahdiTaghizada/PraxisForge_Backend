@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from src.domain.value_objects.enums import (
     DocumentProcessingStatus,
@@ -98,7 +98,42 @@ class TaskUpdateDTO(BaseModel):
     tags: list[str] | None = None
     dependencies: list[uuid.UUID] | None = None
     deadline: datetime | None = None
-    status: TaskStatus | None = None
+    status: TaskStatus | str | None = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status_aliases(cls, value: TaskStatus | str | None) -> TaskStatus | None:
+        if value is None:
+            return None
+        if isinstance(value, TaskStatus):
+            return value
+
+        raw = str(value).strip().lower()
+        alias_map = {
+            "todo": TaskStatus.TODO,
+            "to_do": TaskStatus.TODO,
+            "to-do": TaskStatus.TODO,
+            "to do": TaskStatus.TODO,
+            "backlog": TaskStatus.TODO,
+            "pending": TaskStatus.TODO,
+            "in_progress": TaskStatus.IN_PROGRESS,
+            "in-progress": TaskStatus.IN_PROGRESS,
+            "in progress": TaskStatus.IN_PROGRESS,
+            "doing": TaskStatus.IN_PROGRESS,
+            "wip": TaskStatus.IN_PROGRESS,
+            "done": TaskStatus.DONE,
+            "complete": TaskStatus.DONE,
+            "completed": TaskStatus.DONE,
+            "closed": TaskStatus.DONE,
+        }
+        normalized = alias_map.get(raw)
+        if normalized is None:
+            allowed = ", ".join([s.value for s in TaskStatus])
+            raise ValueError(
+                f"Unsupported status '{value}'. Use one of: {allowed}. "
+                "Aliases accepted: backlog, doing, complete."
+            )
+        return normalized
 
 
 class TaskResponseDTO(BaseModel):
@@ -190,6 +225,11 @@ class FactResponseDTO(BaseModel):
 class FactUpdateDTO(BaseModel):
     content: str = Field(..., min_length=1)
     category: FactCategory | None = None
+
+
+class FactPinDTO(BaseModel):
+    content: str = Field(..., min_length=3, max_length=4000)
+    category: FactCategory = FactCategory.TECHNICAL_DECISION
 
 
 class InsightsResponseDTO(BaseModel):

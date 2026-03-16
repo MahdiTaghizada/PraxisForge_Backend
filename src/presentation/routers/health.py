@@ -1,14 +1,18 @@
 """Health check router with detailed service status."""
 from __future__ import annotations
 
-import os
 from typing import Any
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 from fastapi import APIRouter, status
+import google.generativeai as genai
+from groq import Groq
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
 from sqlalchemy import text
 
+from src.infrastructure.config import settings
 from src.infrastructure.database.session import async_session_factory
 
 router = APIRouter(prefix="/health", tags=["Health"])
@@ -49,8 +53,8 @@ def check_qdrant() -> ServiceHealth:
     """Check Qdrant connectivity and collection status."""
     import time
 
-    qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
-    collection_name = os.getenv("QDRANT_COLLECTION_NAME", "praxisforge")
+    qdrant_url = f"http://{settings.qdrant_host}:{settings.qdrant_port}"
+    collection_name = settings.qdrant_collection
 
     start = time.perf_counter()
     try:
@@ -77,6 +81,83 @@ def check_qdrant() -> ServiceHealth:
         return ServiceHealth(status="unhealthy", message=str(e)[:200])
 
 
+def _provider_roles(provider_name: str) -> list[str]:
+    roles: list[str] = []
+    mapping = {
+        "chat-primary": settings.llm_chat_primary_provider,
+        "chat-fallback": settings.llm_chat_fallback_provider,
+        "search-primary": settings.llm_search_primary_provider,
+        "search-fallback": settings.llm_search_fallback_provider,
+        "summary-primary": settings.llm_summary_primary_provider,
+        "summary-fallback": settings.llm_summary_fallback_provider,
+        "extraction-primary": settings.llm_extraction_primary_provider,
+        "extraction-fallback": settings.llm_extraction_fallback_provider,
+    }
+    for role, provider in mapping.items():
+        if provider == provider_name:
+            roles.append(role)
+    return roles
+
+
+def _check_gemini() -> ServiceHealth:
+    roles = _provider_roles("gemini")
+    if not settings.gemini_api_key:
+        return ServiceHealth(status="degraded", message=f"Not configured; roles={roles}")
+    if not settings.health_llm_probe:
+        return ServiceHealth(status="healthy", message=f"Configured; roles={roles}")
+    try:
+        genai.configure(api_key=settings.gemini_api_key)
+        _ = list(genai.list_models(page_size=1))
+        return ServiceHealth(status="healthy", message=f"Configured + probe OK; roles={roles}")
+    except Exception as e:
+        msg = str(e)
+        if "429" in msg or "quota" in msg.lower():
+            return ServiceHealth(status="degraded", message=f"Rate limited; roles={roles}")
+        return ServiceHealth(status="unhealthy", message=msg[:200])
+
+
+def _check_groq() -> ServiceHealth:
+    roles = _provider_roles("groq")
+    if not settings.groq_api_key:
+        return ServiceHealth(status="degraded", message=f"Not configured; roles={roles}")
+    if not settings.health_llm_probe:
+        return ServiceHealth(status="healthy", message=f"Configured; roles={roles}")
+    try:
+        client = Groq(api_key=settings.groq_api_key)
+        _ = client.models.list().data
+        return ServiceHealth(status="healthy", message=f"Configured + probe OK; roles={roles}")
+    except Exception as e:
+        msg = str(e)
+        if "429" in msg or "rate" in msg.lower():
+            return ServiceHealth(status="degraded", message=f"Rate limited; roles={roles}")
+        return ServiceHealth(status="unhealthy", message=msg[:200])
+
+
+def _check_huggingface() -> ServiceHealth:
+    roles = _provider_roles("huggingface")
+    if not settings.huggingface_api_key:
+        return ServiceHealth(status="degraded", message=f"Not configured; roles={roles}")
+    if not settings.health_llm_probe:
+        return ServiceHealth(status="healthy", message=f"Configured; roles={roles}")
+    try:
+        url = f"{settings.huggingface_api_base.rstrip('/')}/{settings.huggingface_model}"
+        req = Request(
+            url=url,
+            headers={"Authorization": f"Bearer {settings.huggingface_api_key}"},
+            method="GET",
+        )
+        with urlopen(req, timeout=settings.huggingface_timeout_seconds):
+            pass
+        return ServiceHealth(status="healthy", message=f"Configured + probe OK; roles={roles}")
+    except URLError as e:
+        return ServiceHealth(status="unhealthy", message=str(e.reason)[:200])
+    except Exception as e:
+        msg = str(e)
+        if "429" in msg or "rate" in msg.lower():
+            return ServiceHealth(status="degraded", message=f"Rate limited; roles={roles}")
+        return ServiceHealth(status="unhealthy", message=msg[:200])
+
+
 @router.get(
     "",
     response_model=HealthResponse,
@@ -96,10 +177,16 @@ async def detailed_health_check() -> HealthResponse:
     """
     postgres_health = await check_postgres()
     qdrant_health = check_qdrant()
+    gemini_health = _check_gemini()
+    groq_health = _check_groq()
+    huggingface_health = _check_huggingface()
 
     services = {
         "postgres": postgres_health,
         "qdrant": qdrant_health,
+        "llm_gemini": gemini_health,
+        "llm_groq": groq_health,
+        "llm_huggingface": huggingface_health,
     }
 
     # Determine overall status

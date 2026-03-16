@@ -13,12 +13,15 @@ from src.domain.repositories.chat_repo import ChatRepository
 from src.domain.repositories.fact_repo import FactRepository
 from src.domain.repositories.project_repo import ProjectRepository
 from src.domain.repositories.task_repo import TaskRepository
+from src.infrastructure.cache.in_memory_ttl_cache import InMemoryTTLCache
+from src.infrastructure.config import settings
 from src.presentation.dependencies.deps import (
     get_chat_repo,
+    get_summary_cache,
     get_current_user_id,
     get_fact_repo,
-    get_llm_service,
     get_project_repo,
+    get_summary_llm_service,
     get_task_repo,
 )
 
@@ -33,7 +36,8 @@ async def generate_project_summary(
     fact_repo: FactRepository = Depends(get_fact_repo),
     task_repo: TaskRepository = Depends(get_task_repo),
     chat_repo: ChatRepository = Depends(get_chat_repo),
-    llm: LLMService = Depends(get_llm_service),
+    llm: LLMService = Depends(get_summary_llm_service),
+    cache: InMemoryTTLCache[dict] = Depends(get_summary_cache),
 ) -> ProjectSummaryResponseDTO:
     """Generate a full project summary with architecture, facts, and insights."""
     project = await project_repo.get_by_id(project_id, owner_id)
@@ -45,6 +49,8 @@ async def generate_project_summary(
         fact_repo=fact_repo,
         task_repo=task_repo,
         chat_repo=chat_repo,
+        cache=cache,
+        cache_ttl_seconds=settings.summary_cache_ttl_seconds,
     )
     result = await use_case.execute(project)
 

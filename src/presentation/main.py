@@ -3,9 +3,11 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+from src.application.errors import LLMProviderError
 from src.infrastructure.database.session import Base, engine
 from src.infrastructure.external.gemini_embedding import GeminiEmbeddingService
 from src.infrastructure.vector_store.qdrant_store import QdrantVectorStore
@@ -41,6 +43,23 @@ app = FastAPI(
     version="0.3.0",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(LLMProviderError)
+async def llm_provider_error_handler(_: Request, exc: LLMProviderError):
+    headers: dict[str, str] = {}
+    if exc.retry_after_seconds:
+        headers["Retry-After"] = str(exc.retry_after_seconds)
+
+    payload = {
+        "detail": {
+            "code": exc.code,
+            "message": exc.message,
+            "provider": exc.provider,
+            "retry_after_seconds": exc.retry_after_seconds,
+        }
+    }
+    return JSONResponse(status_code=exc.status_code, content=payload, headers=headers)
 
 # ── CORS middleware ──────────────────────────────────────
 app.add_middleware(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
+from src.infrastructure.cache.in_memory_ttl_cache import InMemoryTTLCache
 
 from src.application.interfaces.llm import LLMService
 from src.domain.entities.models import Project, StructuredFact, Task
@@ -52,14 +52,24 @@ class ProjectSummaryUseCase:
         fact_repo: FactRepository,
         task_repo: TaskRepository,
         chat_repo: ChatRepository,
+        cache: InMemoryTTLCache[dict] | None = None,
+        cache_ttl_seconds: int = 120,
     ) -> None:
         self._llm = llm
         self._fact_repo = fact_repo
         self._task_repo = task_repo
         self._chat_repo = chat_repo
+        self._cache = cache
+        self._cache_ttl_seconds = cache_ttl_seconds
 
     async def execute(self, project: Project) -> dict:
         """Generate a full project summary combining all stored data."""
+
+        cache_key = f"summary:{project.id}"
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
 
         # Gather all facts
         all_facts = await self._fact_repo.list_by_project(project.id)
@@ -126,7 +136,7 @@ class ProjectSummaryUseCase:
                 "key_insights": [],
             }
 
-        return {
+        result = {
             "project_name": project.name,
             "project_mode": str(project.mode),
             "summary": parsed.get("summary", ""),
@@ -136,3 +146,8 @@ class ProjectSummaryUseCase:
             "key_insights": parsed.get("key_insights", []),
             "task_overview": task_stats,
         }
+
+        if self._cache:
+            self._cache.set(cache_key, result, self._cache_ttl_seconds)
+
+        return result

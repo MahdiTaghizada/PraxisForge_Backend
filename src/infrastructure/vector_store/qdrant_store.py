@@ -25,8 +25,8 @@ from src.infrastructure.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Gemini text-embedding-004 outputs 768-dimensional vectors
-_VECTOR_SIZE = 768
+# Gemini embedding models currently used in this project output 3072-dimensional vectors
+_VECTOR_SIZE = 3072
 
 
 class QdrantVectorStore(VectorStoreService):

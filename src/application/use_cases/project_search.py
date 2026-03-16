@@ -4,18 +4,34 @@ from __future__ import annotations
 
 import json
 import logging
+import hashlib
 
 from src.application.dtos.schemas import SWOTAnalysis
 from src.application.interfaces.llm import LLMService
 from src.application.interfaces.search_api import SearchAPIService
+from src.infrastructure.cache.in_memory_ttl_cache import InMemoryTTLCache
 
 logger = logging.getLogger(__name__)
 
 
 class ProjectSearchUseCase:
-    def __init__(self, search_api: SearchAPIService, llm: LLMService) -> None:
+    def __init__(
+        self,
+        search_api: SearchAPIService,
+        llm: LLMService,
+        cache: InMemoryTTLCache[dict] | None = None,
+        cache_ttl_seconds: int = 180,
+    ) -> None:
         self._search = search_api
         self._llm = llm
+        self._cache = cache
+        self._cache_ttl_seconds = cache_ttl_seconds
+
+    @staticmethod
+    def _cache_key(project_name: str, project_description: str, custom_query: str | None) -> str:
+        raw = f"{project_name}|{project_description}|{custom_query or ''}"
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        return f"search:{digest}"
 
     async def execute(
         self,
@@ -24,6 +40,12 @@ class ProjectSearchUseCase:
         custom_query: str | None = None,
     ) -> dict:
         """Search the web for similar projects and produce a SWOT analysis."""
+
+        cache_key = self._cache_key(project_name, project_description, custom_query)
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
 
         # 1. Build search queries
         if custom_query:
@@ -96,7 +118,7 @@ class ProjectSearchUseCase:
             }
 
         swot_data = parsed.get("swot", {})
-        return {
+        result = {
             "summary": parsed.get("summary", raw),
             "competitors": parsed.get("competitors", []),
             "swot": SWOTAnalysis(
@@ -107,3 +129,8 @@ class ProjectSearchUseCase:
             ),
             "sources": sources,
         }
+
+        if self._cache:
+            self._cache.set(cache_key, result, self._cache_ttl_seconds)
+
+        return result

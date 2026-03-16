@@ -23,6 +23,24 @@ from src.domain.repositories.knowledge_graph_repo import (
 from src.domain.repositories.task_repo import TaskRepository
 
 logger = logging.getLogger(__name__)
+_PINNED_PREFIX = "[PINNED] "
+
+_HIGH_INTENT_TERMS = {
+    "deadline",
+    "owner",
+    "who",
+    "what",
+    "why",
+    "how",
+    "when",
+    "milestone",
+    "task",
+    "architecture",
+    "database",
+    "remember",
+    "xatirla",
+    "xatırla",
+}
 
 
 @dataclass
@@ -35,6 +53,7 @@ class ProjectContext:
 
     # Gathered data
     facts_by_category: dict[str, list[str]] = field(default_factory=dict)
+    pinned_facts: list[str] = field(default_factory=list)
     tech_stack: list[str] = field(default_factory=list)
     architecture_components: list[str] = field(default_factory=list)
     tasks_summary: str = ""
@@ -67,6 +86,11 @@ class ProjectContext:
                 sections.append(f"\n[{category.upper()}]")
                 for fact in facts[:10]:  # Limit per category
                     sections.append(f"  - {fact}")
+
+        if self.pinned_facts:
+            sections.append("\n=== PINNED CRITICAL DECISIONS (LONG-TERM MEMORY) ===")
+            for fact in self.pinned_facts[:12]:
+                sections.append(f"  - {fact}")
 
         if self.tasks_summary:
             sections.append(f"\n=== TASKS & DEADLINES ===\n{self.tasks_summary}")
@@ -113,6 +137,15 @@ class ProjectBrainUseCase:
         self._relationship_repo = relationship_repo
         self._analysis_repo = analysis_repo
 
+    @staticmethod
+    def _should_use_vector_context(user_query: str) -> bool:
+        query = (user_query or "").strip().lower()
+        if not query:
+            return False
+        if len(query) >= 80:
+            return True
+        return any(term in query for term in _HIGH_INTENT_TERMS)
+
     async def build_context(
         self,
         project_id: uuid.UUID,
@@ -133,7 +166,10 @@ class ProjectBrainUseCase:
         all_facts = await self._fact_repo.list_by_project(project_id)
         for fact in all_facts:
             cat = str(fact.category)
-            ctx.facts_by_category.setdefault(cat, []).append(fact.content)
+            content = str(fact.content)
+            if content.strip().lower().startswith(_PINNED_PREFIX.strip().lower()):
+                ctx.pinned_facts.append(content)
+            ctx.facts_by_category.setdefault(cat, []).append(content)
 
         # Extract tech stack and architecture from facts
         ctx.tech_stack = [
@@ -187,19 +223,27 @@ class ProjectBrainUseCase:
         messages = await self._chat_repo.get_history(project_id, limit=20)
         if messages:
             ctx.recent_chat = "\n".join(
-                f"{m.role.upper()}: {m.content[:200]}" for m in messages[-10:]
+                f"{m.role.upper()}: {m.content[:160]}" for m in messages[-6:]
             )
 
         # 6. Vector search if query is provided
-        if user_query:
+        if user_query and self._should_use_vector_context(user_query):
+            query_len = len(user_query.strip())
+            doc_limit = 3 if query_len < 120 else 5
+            fact_limit = 2 if query_len < 120 else 3
+            analysis_limit = 1 if query_len < 120 else 2
+
             doc_results = await self._vector_store.search(
-                query=user_query, project_id=project_id, limit=5, chunk_type="document"
+                query=user_query, project_id=project_id, limit=doc_limit, chunk_type="document"
             )
             fact_results = await self._vector_store.search(
-                query=user_query, project_id=project_id, limit=3, chunk_type="fact"
+                query=user_query, project_id=project_id, limit=fact_limit, chunk_type="fact"
             )
             analysis_results = await self._vector_store.search(
-                query=user_query, project_id=project_id, limit=2, chunk_type="document_analysis"
+                query=user_query,
+                project_id=project_id,
+                limit=analysis_limit,
+                chunk_type="document_analysis",
             )
 
             context_parts: list[str] = []

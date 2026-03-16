@@ -35,15 +35,20 @@ from src.infrastructure.database.repositories import (
     PostgresTaskRepository,
 )
 from src.infrastructure.database.session import get_db_session
+from src.infrastructure.cache.in_memory_ttl_cache import InMemoryTTLCache
 from src.infrastructure.external.gemini_embedding import GeminiEmbeddingService
 from src.infrastructure.external.gemini_llm import GeminiLLMService
 from src.infrastructure.external.gemini_vision import GeminiVisionService
+from src.infrastructure.external.fallback_llm import FallbackLLMService
 from src.infrastructure.external.groq_llm import GroqLLMService
+from src.infrastructure.external.huggingface_llm import HuggingFaceLLMService
 from src.infrastructure.external.tavily_search import TavilySearchService
 from src.infrastructure.external.text_extraction import TextExtractionService
 from src.infrastructure.vector_store.qdrant_store import QdrantVectorStore
 
 _bearer_scheme = HTTPBearer()
+_summary_cache = InMemoryTTLCache[dict]()
+_search_cache = InMemoryTTLCache[dict]()
 
 
 # ── Authentication ────────────────────────────────────────
@@ -131,14 +136,88 @@ def get_vector_store(
     return QdrantVectorStore(embedding_service)
 
 
+def _build_llm_provider(provider_name: str) -> tuple[str, LLMService] | None:
+    name = (provider_name or "").strip().lower()
+    if name == "gemini" and settings.gemini_api_key:
+        return ("gemini", GeminiLLMService())
+    if name == "groq" and settings.groq_api_key:
+        return ("groq", GroqLLMService())
+    if name == "huggingface" and settings.huggingface_api_key:
+        return ("huggingface", HuggingFaceLLMService())
+    return None
+
+
+def _build_provider_chain(primary: str, fallback: str) -> LLMService:
+    providers: list[tuple[str, LLMService]] = []
+    for provider_name in [primary, fallback]:
+        candidate = _build_llm_provider(provider_name)
+        if candidate and all(existing_name != candidate[0] for existing_name, _ in providers):
+            providers.append(candidate)
+
+    if not providers:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="No LLM provider is configured. Set API keys in .env",
+        )
+
+    if len(providers) == 1:
+        return providers[0][1]
+
+    return FallbackLLMService(
+        providers=providers,
+        retry_attempts=settings.llm_retry_attempts,
+        retry_backoff_seconds=settings.llm_retry_backoff_seconds,
+    )
+
+
+def get_llm_provider(provider_name: str) -> LLMService:
+    provider = _build_llm_provider(provider_name)
+    if not provider:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"LLM provider '{provider_name}' is not configured",
+        )
+    return provider[1]
+
+
 def get_llm_service() -> LLMService:
-    """Primary LLM used for chat (Gemini)."""
-    return GeminiLLMService()
+    """Provider-routed LLM for chat/brain endpoints."""
+    return _build_provider_chain(
+        settings.llm_chat_primary_provider,
+        settings.llm_chat_fallback_provider,
+    )
+
+
+def get_search_llm_service() -> LLMService:
+    """Provider-routed LLM for search analysis endpoint."""
+    return _build_provider_chain(
+        settings.llm_search_primary_provider,
+        settings.llm_search_fallback_provider,
+    )
+
+
+def get_summary_llm_service() -> LLMService:
+    """Provider-routed LLM for project summary endpoint."""
+    return _build_provider_chain(
+        settings.llm_summary_primary_provider,
+        settings.llm_summary_fallback_provider,
+    )
+
+
+def get_summary_cache() -> InMemoryTTLCache[dict]:
+    return _summary_cache
+
+
+def get_search_cache() -> InMemoryTTLCache[dict]:
+    return _search_cache
 
 
 def get_extraction_llm() -> LLMService:
-    """Fast LLM used for background extraction tasks (Groq)."""
-    return GroqLLMService()
+    """Provider-routed LLM used for background extraction tasks."""
+    return _build_provider_chain(
+        settings.llm_extraction_primary_provider,
+        settings.llm_extraction_fallback_provider,
+    )
 
 
 def get_search_api() -> SearchAPIService:

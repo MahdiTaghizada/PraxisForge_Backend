@@ -16,12 +16,33 @@ class Settings(BaseSettings):
 
     # ── Gemini ────────────────────────────────────────────
     gemini_api_key: str = ""
-    gemini_embedding_model: str = "models/text-embedding-004"
-    gemini_llm_model: str = "models/gemini-1.5-flash"
+    gemini_embedding_model: str = "models/gemini-embedding-001"
+    gemini_llm_model: str = "models/gemini-2.5-flash"
 
     # ── Groq ──────────────────────────────────────────────
     groq_api_key: str = ""
-    groq_model: str = "llama-3.1-70b-versatile"
+    groq_model: str = "llama-3.3-70b-versatile"
+
+    # ── Hugging Face Inference (optional LLM fallback) ─────
+    huggingface_api_key: str = ""
+    huggingface_model: str = "mistralai/Mistral-7B-Instruct-v0.3"
+    huggingface_api_base: str = "https://api-inference.huggingface.co/models"
+    huggingface_timeout_seconds: int = 45
+
+    # ── LLM routing / fallback strategy ────────────────────
+    llm_chat_primary_provider: str = "groq"
+    llm_chat_fallback_provider: str = "gemini"
+    llm_search_primary_provider: str = "groq"
+    llm_search_fallback_provider: str = "gemini"
+    llm_summary_primary_provider: str = "groq"
+    llm_summary_fallback_provider: str = "gemini"
+    llm_extraction_primary_provider: str = "groq"
+    llm_extraction_fallback_provider: str = "huggingface"
+    llm_retry_attempts: int = 2
+    llm_retry_backoff_seconds: float = 0.7
+    summary_cache_ttl_seconds: int = 120
+    search_cache_ttl_seconds: int = 180
+    health_llm_probe: bool = False
 
     # ── Tavily ────────────────────────────────────────────
     tavily_api_key: str = ""
