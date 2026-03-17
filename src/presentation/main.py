@@ -8,11 +8,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.application.errors import LLMProviderError
+from src.infrastructure.config import settings
 from src.infrastructure.database.session import Base, engine
 from src.infrastructure.external.gemini_embedding import GeminiEmbeddingService
 from src.infrastructure.vector_store.qdrant_store import QdrantVectorStore
 from src.presentation.routers import (
-    chat, comments, files, health, insights, members, projects, search, tasks, users,
+    auth, chat, comments, files, health, insights, members, projects, search, tasks, users,
 )
 from src.presentation.routers import summary
 from src.presentation.routers import brain, documents, knowledge_graph
@@ -41,6 +42,7 @@ app = FastAPI(
     title="PraxisForge",
     description="AI-driven Project Management & Growth Platform",
     version="0.3.0",
+    root_path=settings.root_path,
     lifespan=lifespan,
 )
 
@@ -64,8 +66,8 @@ async def llm_provider_error_handler(_: Request, exc: LLMProviderError):
 # ── CORS middleware ──────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:8080"],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -77,10 +79,12 @@ app.include_router(chat.router, prefix="/api/v1")
 app.include_router(search.router, prefix="/api/v1")
 app.include_router(insights.router, prefix="/api/v1")
 app.include_router(summary.router, prefix="/api/v1")
+app.include_router(auth.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(members.router, prefix="/api/v1")
 app.include_router(comments.router, prefix="/api/v1")
 app.include_router(knowledge_graph.router, prefix="/api/v1")
 app.include_router(brain.router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
+app.include_router(auth.router)
 app.include_router(health.router)  # No prefix - /health, /health/ready, /health/live

@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # ── JWT ───────────────────────────────────────────────
     jwt_secret: str = "changeme"
     jwt_algorithm: str = "HS256"
+    access_token_expire_hours: int = 24
+
+    # ── Reverse Proxy Path Prefix ─────────────────────────
+    root_path: str = ""
 
     # ── File Storage ──────────────────────────────────────
     upload_dir: str = "./uploads"

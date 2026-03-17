@@ -26,6 +26,24 @@ class UserResponseDTO(BaseModel):
     email: str | None = None
 
 
+class AuthUserDTO(BaseModel):
+    username: str
+    email: str
+    role: str
+
+
+class UserRegisterDTO(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=128)
+    role: str = "member"
+
+
+class TokenResponseDTO(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
 # ── Project DTOs ──────────────────────────────────────────
 
 
